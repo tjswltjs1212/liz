@@ -19,13 +19,28 @@ FILE_ID = "1lbks2ZHhqs1sx6XZONsOtFB5kIeT9SVD"
 
 class PensionData():
     def __init__(self, filepath=None):
-        url = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
-        response = requests.get(url)
-        self.df = pd.read_csv(io.BytesIO(response.content), encoding='cp949')
+        self.df = self._load_from_drive()
         self.pattern1 = '(\([^)]+\))'
         self.pattern2 = '(\[[^)]+\])'
         self.pattern3 = '[^A-Za-z0-9가-힣]'
         self.preprocess()
+
+    def _load_from_drive(self):
+        session = requests.Session()
+        url = "https://drive.google.com/uc?export=download"
+        response = session.get(url, params={"id": FILE_ID}, stream=True)
+        
+        # 대용량 파일 확인 토큰 처리
+        token = None
+        for key, value in response.cookies.items():
+            if key.startswith("download_warning"):
+                token = value
+        
+        if token:
+            response = session.get(url, params={"id": FILE_ID, "confirm": token}, stream=True)
+        
+        content = b"".join(response.iter_content(chunk_size=32768))
+        return pd.read_csv(io.BytesIO(content), encoding='cp949')
           
     def preprocess(self):
         self.df.columns = [
