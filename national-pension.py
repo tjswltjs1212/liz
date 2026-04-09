@@ -79,7 +79,7 @@ class PensionData():
 
 @ st.cache_data
 def read_pensiondata():
-    data = PensionData('./data/national-pension.csv')
+    data = PensionData()
     return data
 
 data = read_pensiondata()
