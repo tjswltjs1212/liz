@@ -1,153 +1,138 @@
-import os
-import warnings
-import numpy as np
+import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-import streamlit as st
+import io
+import requests
 
-# 한글 폰트 설정
-# plt.rcParams['font.family'] = "AppleGothic"
-# Windows, 리눅스 사용자
-plt.rcParams['font.family'] = "NanumGothic"
-plt.rcParams['axes.unicode_minus'] = False
+st.set_page_config(page_title="National Pension Dashboard", page_icon="🏢", layout="wide")
+st.title("🏢 National Pension Workplace Dashboard")
 
-class PensionData():
-    def __init__(self, filepath):
-        self.df = pd.read_csv(os.path.join(filepath), encoding='cp949')
-        self.pattern1 = '(\([^)]+\))'
-        self.pattern2 = '(\[[^)]+\])'
-        self.pattern3 = '[^A-Za-z0-9가-힣]'
-        self.preprocess()
-          
-    def preprocess(self):
-        self.df.columns = [
-            '자료생성년월', '사업장명', '사업자등록번호', '가입상태', '우편번호',
-            '사업장지번상세주소', '주소', '고객법정동주소코드', '고객행정동주소코드', 
-            '시도코드', '시군구코드', '읍면동코드', 
-            '사업장형태구분코드 1 법인 2 개인', '업종코드', '업종코드명', 
-            '적용일자', '재등록일자', '탈퇴일자',
-            '가입자수', '금액', '신규', '상실'
-        ]
-        df = self.df.drop(['자료생성년월', '우편번호', '사업장지번상세주소', '고객법정동주소코드', '고객행정동주소코드', '사업장형태구분코드 1 법인 2 개인', '적용일자', '재등록일자'], axis=1)
-        df['사업장명'] = df['사업장명'].apply(self.preprocessing)
-        df['탈퇴일자_연도'] =  pd.to_datetime(df['탈퇴일자']).dt.year
-        df['탈퇴일자_월'] =  pd.to_datetime(df['탈퇴일자']).dt.month
-        df['시도'] = df['주소'].str.split(' ').str[0]
-        df = df.loc[df['가입상태'] == 1].drop(['가입상태', '탈퇴일자'], axis=1).reset_index(drop=True)
-        df['인당금액'] = df['금액'] / df['가입자수']
-        df['월급여추정'] =  df['인당금액'] / 9 * 100
-        df['연간급여추정'] = df['월급여추정'] * 12
-        self.df = df
+# ── Google Drive CSV ──────────────────────────────────────────────────────────
+FILE_ID = "1lbks2ZHhqs1sx6XZONsOtFB5kIeT9SVD"
+GDRIVE_URL = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
 
-        
-    def preprocessing(self, x):
-        x = re.sub(self.pattern1, '', x)
-        x = re.sub(self.pattern2, '', x)
-        x = re.sub(self.pattern3, ' ', x)
-        x = re.sub(' +', ' ', x)
-        return x
-    
-    def find_company(self, company_name):
-        return self.df.loc[self.df['사업장명'].str.contains(company_name), ['사업장명', '월급여추정', '연간급여추정', '업종코드', '가입자수']]\
-                  .sort_values('가입자수', ascending=False)
-    
-    def compare_company(self, company_name):
-        company = self.find_company(company_name)
-        code = company['업종코드'].iloc[0]
-        df1 = self.df.loc[self.df['업종코드'] == code, ['월급여추정', '연간급여추정']].agg(['mean', 'count', 'min', 'max'])
-        df1.columns = ['업종_월급여추정', '업종_연간급여추정']
-        df1 = df1.T
-        df1.columns = ['평균', '개수', '최소', '최대']
-        df1.loc['업종_월급여추정', company_name] = company['월급여추정'].values[0]
-        df1.loc['업종_연간급여추정', company_name] = company['연간급여추정'].values[0]
-        return df1
+@st.cache_data(show_spinner="Loading data from Google Drive...")
+def load_data():
+    try:
+        response = requests.get(GDRIVE_URL)
+        response.raise_for_status()
+        df = pd.read_csv(io.BytesIO(response.content), encoding="cp949", low_memory=False)
+        return df, True
+    except Exception as e:
+        st.warning(f"Could not load real data: {e}. Using sample data instead.")
+        return load_sample(), False
 
-    def company_info(self, company_name):
-        company = self.find_company(company_name)
-        return self.df.loc[company.iloc[0].name]
-        
-    def get_data(self):
-        return self.df
+def load_sample():
+    import numpy as np
+    rng = np.random.default_rng(42)
+    n = 2000
+    regions    = ["Seoul","Busan","Incheon","Daegu","Gwangju",
+                  "Daejeon","Ulsan","Gyeonggi","Gangwon","Jeju"]
+    industries = ["Manufacturing","Retail","IT/Software","Construction",
+                  "Healthcare","Finance","Education","Food Service",
+                  "Logistics","Real Estate"]
+    return pd.DataFrame({
+        "year_month":      rng.choice(["202312","202401","202402","202403","202404","202405"], n),
+        "workplace_name":  [f"Company_{i}" for i in range(n)],
+        "status":          rng.choice(["Active","Inactive"], n, p=[0.9,0.1]),
+        "region":          rng.choice(regions, n),
+        "industry":        rng.choice(industries, n),
+        "subscribers":     rng.integers(3, 500, n),
+        "monthly_billing": rng.integers(500_000, 50_000_000, n),
+        "new_enrollees":   rng.integers(0, 20, n),
+        "lost_enrollees":  rng.integers(0, 15, n),
+    })
 
-@ st.cache_data
-def read_pensiondata():
-    data = PensionData('./data/national-pension.csv')
-    return data
+df_raw, is_real = load_data()
 
-data = read_pensiondata()
-company_name = st.text_input('회사명을 입력해 주세요', placeholder='검색할 회사명 입력')
+# ── Column rename (real data) ─────────────────────────────────────────────────
+if is_real:
+    df_raw.rename(columns={
+        "자료생성년월":"year_month","사업장명":"workplace_name",
+        "가입상태":"status","광역시코드":"region","업종코드명":"industry",
+        "가입자수":"subscribers","고지금액":"monthly_billing",
+        "신규":"new_enrollees","상실":"lost_enrollees",
+    }, inplace=True)
+    st.success("✅ Real data loaded from Google Drive!")
+else:
+    st.info("⚠️ Demo mode – using sample data.")
 
-if data and company_name:
-    output = data.find_company(company_name=company_name)
-    if len(output) > 0:
-        st.subheader(output.iloc[0]['사업장명'])
-        info = data.company_info(company_name=company_name)
-        st.markdown(
-            f"""
-            - `{info['주소']}`
-            - 업종코드명 `{info['업종코드명']}`
-            - 총 근무자 `{int(info['가입자수']):,}` 명
-            - 신규 입사자 `{info['신규']:,}` 명
-            - 퇴사자 `{info['상실']:,}` 명
-            """
-        )
-        col1, col2, col3 = st.columns(3)
-        col1.text('월급여 추정')
-        col1.markdown(f"`{int(output.iloc[0]['월급여추정']):,}` 원")
+df = df_raw.copy()
 
-        col2.text('연봉 추정')
-        col2.markdown(f"`{int(output.iloc[0]['연간급여추정']):,}` 원")
+for col in ["subscribers","monthly_billing","new_enrollees","lost_enrollees"]:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        col3.text('가입자수 추정')
-        col3.markdown(f"`{int(output.iloc[0]['가입자수']):,}` 명")
+df["est_monthly_salary"] = (df["monthly_billing"] / df["subscribers"].replace(0, pd.NA)) / 0.09
+df["est_annual_salary"]  = df["est_monthly_salary"] * 12
 
-        st.dataframe(output.round(0), use_container_width=True)
+# ── Sidebar filters ───────────────────────────────────────────────────────────
+with st.sidebar:
+    st.header("🔍 Filters")
+    regions_list = sorted(df["region"].dropna().unique())
+    sel_region = st.multiselect("Region", regions_list, default=regions_list[:5])
+    if sel_region:
+        df = df[df["region"].isin(sel_region)]
+    industries_list = sorted(df["industry"].dropna().unique())
+    sel_industry = st.multiselect("Industry", industries_list, default=industries_list[:5])
+    if sel_industry:
+        df = df[df["industry"].isin(sel_industry)]
 
-        comp_output = data.compare_company(company_name=company_name)
-        st.dataframe(comp_output.round(0), use_container_width=True)
+# ── KPI ───────────────────────────────────────────────────────────────────────
+st.subheader("📊 Key Metrics")
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Total Workplaces",       f"{len(df):,}")
+k2.metric("Total Subscribers",      f"{int(df['subscribers'].sum()):,}")
+k3.metric("Total Billing (KRW)",    f"₩{int(df['monthly_billing'].sum()):,}")
+k4.metric("Avg Est. Annual Salary", f"₩{int(df['est_annual_salary'].median()):,}")
+st.divider()
 
-        st.markdown(f'### 업종 평균 VS {company_name} 비교')
+# ── Charts ────────────────────────────────────────────────────────────────────
+col_a, col_b = st.columns(2)
 
-        percent_value = info['월급여추정'] / comp_output.iloc[0, 0] * 100 - 100
-        diff_month = abs(comp_output.iloc[0, 0] - info['월급여추정'])
-        diff_year = abs(comp_output.iloc[1, 0] - info['연간급여추정'])
-        upordown = '높은' if percent_value > 0 else '낮은' 
+with col_a:
+    st.subheader("Subscribers by Region")
+    reg = df.groupby("region")["subscribers"].sum().sort_values(ascending=False)
+    fig, ax = plt.subplots()
+    reg.plot(kind="bar", ax=ax, color="steelblue")
+    ax.set_xlabel("Region"); ax.set_ylabel("Subscribers")
+    plt.xticks(rotation=30, ha="right"); plt.tight_layout()
+    st.pyplot(fig); plt.close()
 
-        st.markdown(f"""
-        - 업종 **평균 월급여**는 `{int(comp_output.iloc[0, 0]):,}` 원, **평균 연봉**은 `{int(comp_output.iloc[1, 0]):,}` 원 입니다.
-        - `{company_name}`는 평균 보다 `{int(diff_month):,}` 원, :red[약 {percent_value:.2f} %] `{upordown}` `{int(info['월급여추정']):,}` 원을 **월 평균 급여**를 받는 것으로 추정합니다.
-        - `{company_name}`는 평균 보다 `{int(diff_year):,}` 원 `{upordown}` `{int(info['연간급여추정']):,}` 원을 **연봉**을 받는 것으로 추정합니다.
-        """)
+with col_b:
+    st.subheader("Subscribers by Industry")
+    ind = df.groupby("industry")["subscribers"].sum().sort_values().tail(10)
+    fig, ax = plt.subplots()
+    ind.plot(kind="barh", ax=ax, color="coral")
+    ax.set_xlabel("Subscribers"); plt.tight_layout()
+    st.pyplot(fig); plt.close()
 
-        fig, ax = plt.subplots(1, 2)
+col_c, col_d = st.columns(2)
 
-        p1 = ax[0].bar(x=["Average", "Your Company"], height=(comp_output.iloc[0, 0], info['월급여추정']), width=0.7)
-        ax[0].bar_label(p1, fmt='%d')
-        p1[0].set_color('black')
-        p1[1].set_color('red')
-        ax[0].set_title('Monthly Salary')
+with col_c:
+    st.subheader("Est. Annual Salary Distribution")
+    sal = df["est_annual_salary"].dropna()
+    sal = sal[sal < sal.quantile(0.99)]
+    fig, ax = plt.subplots()
+    ax.hist(sal, bins=40, color="#636EFA", edgecolor="white")
+    ax.set_xlabel("Est. Annual Salary (KRW)"); ax.set_ylabel("Count")
+    plt.tight_layout(); st.pyplot(fig); plt.close()
 
-        p2 = ax[1].bar(x=["Average", "Your Company"], height=(comp_output.iloc[1, 0], info['연간급여추정']), width=0.7)
-        p2[0].set_color('black')
-        p2[1].set_color('red')
-        ax[1].bar_label(p2, fmt='%d')
-        ax[1].set_title('Yearly Salary')
+with col_d:
+    st.subheader("New vs Lost Enrollees by Region")
+    nl = df.groupby("region")[["new_enrollees","lost_enrollees"]].sum()
+    fig, ax = plt.subplots()
+    nl.plot(kind="bar", ax=ax, color=["#2ECC71","#E74C3C"])
+    plt.xticks(rotation=30, ha="right"); plt.tight_layout()
+    st.pyplot(fig); plt.close()
 
-        ax[0].tick_params(axis='both', which='major', labelsize=8, rotation=0)
-        ax[0].tick_params(axis='both', which='minor', labelsize=6)
-        ax[1].tick_params(axis='both', which='major', labelsize=8)
-        ax[1].tick_params(axis='both', which='minor', labelsize=6)
+# ── Top 20 ────────────────────────────────────────────────────────────────────
+st.subheader("🏆 Top 20 Workplaces by Subscribers")
+top20 = df.nlargest(20,"subscribers")[["workplace_name","subscribers","region","industry"]].reset_index(drop=True)
+top20.index += 1
+st.dataframe(top20, use_container_width=True)
 
-        st.pyplot(fig)
+with st.expander("🔎 Raw Data"):
+    st.dataframe(df.head(500), use_container_width=True)
 
-        st.markdown('### 동종업계')
-        df = data.get_data()
-        st.dataframe(df.loc[df['업종코드'] == info['업종코드'], ['사업장명', '월급여추정', '연간급여추정', '가입자수']]\
-            .sort_values('연간급여추정', ascending=False).head(10).round(0), 
-            use_container_width=True
-        )
-        
-    else:
-        st.subheader('검색결과가 없습니다')
+st.caption("Built with Streamlit · Data: Korea Public Data Portal · Pension rate: 9%")
